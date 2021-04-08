@@ -6,8 +6,17 @@ import cn.hutool.core.io.IoUtil;
 import cn.hutool.core.lang.ClassScanner;
 import cn.hutool.core.util.RandomUtil;
 import cn.hutool.core.util.ReflectUtil;
+import cn.hutool.core.util.StrUtil;
+import cn.hutool.crypto.Mode;
+import cn.hutool.crypto.Padding;
 import cn.hutool.crypto.SecureUtil;
 import cn.hutool.crypto.digest.MD5;
+import cn.hutool.crypto.symmetric.AES;
+import cn.hutool.crypto.symmetric.DES;
+import cn.hutool.crypto.symmetric.DESede;
+import cn.hutool.crypto.symmetric.PBKDF2;
+import cn.hutool.crypto.symmetric.RC4;
+import cn.hutool.crypto.symmetric.SM4;
 import cn.hutool.crypto.symmetric.SymmetricCrypto;
 import org.junit.After;
 import org.junit.AfterClass;
@@ -27,21 +36,17 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.security.SecureRandom;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-/**
- * 文件对称加密算法单元测试
- *
- * @author vincentruan
- */
 @RunWith(Parameterized.class)
 public class FileSymmetricParameterizedTest {
 
 	private final SymmetricCrypto symmetricCrypto;
 
-	private final static String hugeFilePath = "F:\\dm\\huge\\huge-data.data";
+	private final static String hugeFilePath = "E:\\dm\\huge\\huge-data.data";
 
 	private final static StopWatch stopWatch = new StopWatch();
 
@@ -53,7 +58,7 @@ public class FileSymmetricParameterizedTest {
 	public static void createHugeFile() throws IOException {
 		// write a huge file to disk
 		try (OutputStream out = FileUtil.getOutputStream(hugeFilePath)) {
-			for (int i = 0; i < 50_000; i++) {
+			for (int i = 0; i < 10_000; i++) {
 				out.write(RandomUtil.randomBytes(IoUtil.DEFAULT_LARGE_BUFFER_SIZE));
 			}
 			out.flush();
@@ -68,11 +73,18 @@ public class FileSymmetricParameterizedTest {
 
 	@Parameterized.Parameters
 	public static Collection<Object[]> prepareData() {
-		final SecureRandom random = RandomUtil.getSecureRandom("QWEqwertyuio!@#$%^&*1234567DFGHJcvbnzxcvbnm,,../.l".getBytes());
 		// 测试数据
 		Set<Class<?>> subClassSet = ClassScanner.scanPackageBySuper("cn.hutool.crypto.symmetric", SymmetricCrypto.class);
 		// 将数组转换成集合返回
-		return subClassSet.stream().map(ReflectUtil::newInstanceIfPossible).filter(Objects::nonNull).map(c -> new Object[]{c}).collect(Collectors.toList());
+		Collection<Object[]> testInstances = subClassSet.stream().map(ReflectUtil::newInstanceIfPossible).filter(Objects::nonNull).map(c -> new Object[]{c}).collect(Collectors.toList());
+
+		// 自定义
+		testInstances.add(new Object[]{new AES(Mode.CTS, Padding.PKCS5Padding, "0CoJUm6Qyw8W8jue".getBytes(), "0102030405060708".getBytes())});
+		testInstances.add(new Object[]{new DES(Mode.CTS, Padding.PKCS5Padding, "0CoJUm6Qyw8W8jue".getBytes(), "0102030405060708".getBytes())});
+		testInstances.add(new Object[]{new DESede(Mode.CBC, Padding.PKCS5Padding, RandomUtil.randomBytes(64), "0102030405060708".getBytes())});
+		testInstances.add(new Object[]{new SM4(Mode.CBC, Padding.ISO10126Padding, "0CoJUm6Qyw8W8jue".getBytes(), "0102030405060708".getBytes())});
+		return testInstances;
+		// return subClassSet.stream().map(c -> ReflectUtil.newInstance(c, Mode.CBC, Padding.ZeroPadding, StrUtil.bytes(RandomUtil.randomString(256)), StrUtil.bytes(RandomUtil.randomString(16)))).map(c -> new Object[]{c}).collect(Collectors.toList());
 	}
 
 	/**
@@ -121,13 +133,22 @@ public class FileSymmetricParameterizedTest {
 
 		try (BufferedInputStream bis = FileUtil.getInputStream(originalFile)) {
 			stopWatch.start(shortClassName + "加密");
-			File encryptedFile = symmetricCrypto.encrypt(bis, encryptedFilePath);
-			stopWatch.stop();
+			File encryptedFile;
+			try {
+				encryptedFile = symmetricCrypto.encrypt(bis, encryptedFilePath);
+			} finally {
+				stopWatch.stop();
+			}
+
 			System.out.println(shortClassName + "加密后文件大小[" + FileUtil.readableFileSize(encryptedFile) + "]");
 			try (BufferedInputStream encBis = FileUtil.getInputStream(encryptedFile)) {
 				stopWatch.start(shortClassName + "解密");
-				File decryptedFile = symmetricCrypto.decrypt(encBis, decryptedFilePath);
-				stopWatch.stop();
+				File decryptedFile = null;
+				try {
+					decryptedFile = symmetricCrypto.decrypt(encBis, decryptedFilePath);
+				} finally {
+					stopWatch.stop();
+				}
 				String decryptedMd5 = new MD5().digestHex(decryptedFile);
 				System.out.println(stopWatch.prettyPrint());
 				Assert.assertEquals(shortClassName + " md5 check failed.", originalMd5, decryptedMd5);

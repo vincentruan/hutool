@@ -24,6 +24,7 @@ import javax.crypto.spec.PBEParameterSpec;
 import java.io.BufferedOutputStream;
 import java.io.File;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.Serializable;
 import java.nio.charset.Charset;
 import java.nio.file.Path;
@@ -356,7 +357,7 @@ public class SymmetricCrypto implements Serializable {
 	/**
 	 * 加密普通文件到对应文件中
 	 *
-	 * @param plainInputStream 待被加密的输入流(未加密)，流不会自动关闭，需要调用者自行处理
+	 * @param plainInputStream 待被加密的输入流(未加密)，流会自动关闭
 	 * @return 加密后的文件路径
 	 * @throws CryptoException IO异常
 	 */
@@ -366,10 +367,31 @@ public class SymmetricCrypto implements Serializable {
 
 		FileUtil.delQuietly(outputEncFilePath);
 
+		try (BufferedOutputStream bos = FileUtil.getOutputStream(outputEncFilePath)) {
+			encrypt(plainInputStream, bos);
+		} catch (Exception e) {
+			throw new CryptoException(e);
+		} finally {
+			IoUtil.close(plainInputStream);
+		}
+
+		return outputEncFilePath.toFile();
+	}
+
+	/**
+	 * 加密普通文件到对应文件中
+	 *
+	 * @param plainInputStream 待被加密的输入流(未加密)，流不会自动关闭，需要调用者自行处理
+	 * @param outputStream 文件输出流，流在方法内自动关闭
+	 * @throws CryptoException IO异常
+	 */
+	public void encrypt(InputStream plainInputStream, OutputStream outputStream) {
+		Assert.notNull(plainInputStream, "Input stream must not be null");
+		Assert.notNull(outputStream, "Out stream must not be null");
+
 		lock.lock();
-		try (BufferedOutputStream bos = FileUtil.getOutputStream(outputEncFilePath);
-			 // 创建加密流
-			 CipherOutputStream cipherOutputStream = new CipherOutputStream(bos, cipher)) {
+		// 创建加密流
+		try (CipherOutputStream cipherOutputStream = new CipherOutputStream(outputStream, cipher)) {
 			if (null == this.params) {
 				cipher.init(Cipher.ENCRYPT_MODE, secretKey);
 			} else {
@@ -391,23 +413,6 @@ public class SymmetricCrypto implements Serializable {
 			lock.unlock();
 		}
 
-		return outputEncFilePath.toFile();
-	}
-
-	/**
-	 * 数据按照blockSize的整数倍长度填充末尾段的0
-	 *
-	 * @param data      数据
-	 * @param blockSize 块大小
-	 * @return 末尾段填充后的数据，如果长度刚好，返回空
-	 * @since 5.X
-	 */
-	private byte[] paddingLastSegmentWithZero(byte[] data, int blockSize) {
-		final int length = data.length;
-		// 按照块拆分后的数据中多余的数据
-		final int remainLength = length % blockSize;
-		// 多余部分填充0
-		return new byte[blockSize - remainLength];
 	}
 
 	/**
@@ -537,10 +542,30 @@ public class SymmetricCrypto implements Serializable {
 
 		FileUtil.delQuietly(outputDecFilePath);
 
+		try (BufferedOutputStream bos = FileUtil.getOutputStream(outputDecFilePath)) {
+			decrypt(encryptedDataStream, bos);
+		} catch (Exception e) {
+			throw new CryptoException(e);
+		}
+
+		return outputDecFilePath.toFile();
+	}
+
+	/**
+	 * 解密加密后的文件到对应文件
+	 *
+	 * @param encryptedDataStream 被解密的输入流(已加密)，会自动关闭流
+	 * @param outputStream 待输出的解密流
+	 * @return 解密后的文件
+	 * @throws CryptoException IO异常
+	 */
+	public void decrypt(InputStream encryptedDataStream, OutputStream outputStream) {
+		Assert.notNull(encryptedDataStream, "Encrypted input stream must not be null");
+		Assert.notNull(outputStream, "Output Stream must not be null");
+
 		lock.lock();
-		try (BufferedOutputStream bos = FileUtil.getOutputStream(outputDecFilePath);
-			 // 创建解密流
-			 CipherInputStream cipherInputStream = new CipherInputStream(encryptedDataStream, cipher)) {
+		// 创建解密流
+		try (CipherInputStream cipherInputStream = new CipherInputStream(encryptedDataStream, cipher)) {
 			if (null == this.params) {
 				cipher.init(Cipher.DECRYPT_MODE, secretKey);
 			} else {
@@ -551,17 +576,15 @@ public class SymmetricCrypto implements Serializable {
 			int len;
 			// 解密流开始写入文件
 			while ((len = cipherInputStream.read(cache, 0, cache.length)) != -1) {
-				bos.write(cache, 0, len);
+				outputStream.write(cache, 0, len);
 			}
 
-			bos.flush();
+			outputStream.flush();
 		} catch (Exception e) {
 			throw new CryptoException(e);
 		} finally {
 			lock.unlock();
 		}
-
-		return outputDecFilePath.toFile();
 	}
 
 	/**
